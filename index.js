@@ -1,6 +1,6 @@
 const TelegramBot = require('node-telegram-bot-api');
 const express = require('express');
-const { exec } = require('child_process');
+const ytdl = require('ytdl-core');
 const fs = require('fs');
 
 const token = process.env.TOKEN;
@@ -10,12 +10,6 @@ const bot = new TelegramBot(token);
 const app = express();
 
 app.use(express.json());
-
-// تثبيت yt-dlp تلقائي
-exec("apt update && apt install -y yt-dlp ffmpeg", (err) => {
-    if (err) console.log("❌ install failed");
-    else console.log("✅ yt-dlp installed");
-});
 
 // webhook
 app.post(`/bot${token}`, (req, res) => {
@@ -32,81 +26,69 @@ bot.onText(/\/start/, (msg) => {
     bot.sendMessage(msg.chat.id,
 `👋 أهلاً بيك
 
-📥 ابعت أي لينك فيديو
-وهتختار:
+📥 ابعت لينك YouTube
+وهختارلك:
 
 🎥 فيديو
-🎧 MP3
-
-📩 الدعم:
-@Abdalluhgomaa`);
+🎧 MP3`);
 });
 
 // استقبال اللينك
-bot.on('message', (msg) => {
-    const text = msg.text;
+bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
+    const text = msg.text;
 
     if (!text || text.startsWith("/")) return;
 
-    if (text.startsWith("http")) {
+    if (ytdl.validateURL(text)) {
         bot.sendMessage(chatId, "اختار 👇", {
             reply_markup: {
                 inline_keyboard: [
                     [
-                        { text: "🎥 جودة عالية", callback_data: `high|${text}` },
-                        { text: "📱 جودة متوسطة", callback_data: `low|${text}` }
-                    ],
-                    [
+                        { text: "🎥 فيديو", callback_data: `video|${text}` },
                         { text: "🎧 MP3", callback_data: `mp3|${text}` }
                     ]
                 ]
             }
         });
+    } else {
+        bot.sendMessage(chatId, "❌ اللينك لازم يكون YouTube حالياً");
     }
 });
 
 // الأزرار
-bot.on('callback_query', (query) => {
+bot.on('callback_query', async (query) => {
     const chatId = query.message.chat.id;
     const [type, url] = query.data.split("|");
 
     bot.sendMessage(chatId, "⏳ جاري التحميل...");
 
-    let file = "";
+    try {
+        const file = `${chatId}.mp4`;
 
-    if (type === "high") {
-        file = `video_${chatId}.mp4`;
-        exec(`yt-dlp -f best -o ${file} ${url}`, sendFile);
-    }
+        if (type === "video") {
+            const stream = ytdl(url, { quality: 'highest' });
+            const writeStream = fs.createWriteStream(file);
 
-    if (type === "low") {
-        file = `video_${chatId}.mp4`;
-        exec(`yt-dlp -f worst -o ${file} ${url}`, sendFile);
-    }
+            stream.pipe(writeStream);
 
-    if (type === "mp3") {
-        file = `audio_${chatId}.mp3`;
-        exec(`yt-dlp -x --audio-format mp3 -o ${file} ${url}`, sendFile);
-    }
-
-    function sendFile(err) {
-        if (err) {
-            bot.sendMessage(chatId, "❌ فشل التحميل");
-            return;
+            writeStream.on('finish', () => {
+                bot.sendVideo(chatId, file).then(() => {
+                    fs.unlinkSync(file);
+                });
+            });
         }
 
         if (type === "mp3") {
-            bot.sendAudio(chatId, file);
-        } else {
-            bot.sendVideo(chatId, file);
+            bot.sendMessage(chatId, "❌ MP3 محتاج ffmpeg (مش متاح هنا)");
         }
 
-        fs.unlinkSync(file);
+    } catch (err) {
+        bot.sendMessage(chatId, "❌ حصل خطأ");
     }
 });
 
-// تشغيل السيرفر
+// server
 app.listen(3000, () => {
     console.log("🚀 Server running");
 });
